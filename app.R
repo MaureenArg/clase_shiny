@@ -1,61 +1,183 @@
-
-## cargar paquetes
-
+library(shiny)
 library(terra)
 library (dplyr)
 library (sf)
-install.packages ("spData")
-install.packages("shiny")
 library(spData)
 library(shiny)
+library (flexdashboard)
+library (rgdal)
+library (plotly)
+install.packages("shinydashboard")
+library (shinydashboard)
+library (shiny)
+install.packages("shiny")
+install.packages ("spData")
 
-
-#
-# This is a Shiny web application. You can run the application by clicking
-# the 'Run App' button above.
-#
-# Find out more about building applications with Shiny here:
-#
-#    http://shiny.rstudio.com/
-#
-
-library(shiny)
-
-# Define UI for application that draws a histogram
-ui <- fluidPage(
-  
-  # Application title
-  titlePanel("Old Faithful Geyser Data"),
-  
-  # Sidebar with a slider input for number of bins 
-  sidebarLayout(
-    sidebarPanel(
-      sliderInput("bins",
-                  "Cantidad de bins:",
-                  min = 1,
-                  max = 50,
-                  value = 40)
-    ),
-    
-    # Show a plot of the generated distribution
-    mainPanel(
-      plotOutput("distPlot")
-    )
+# Lectura de una capa vectorial (GeoJSON) de provincias de Costa Rica
+provincias <-
+  st_read(
+    "https://github.com/tpb728O-programaciongeoespacialr/2021ii/raw/main/datos/ign/delimitacion-territorial-administrativa/provincias-simplificadas_100m.geojson",
+    quiet = TRUE
   )
-)
 
-# Define server logic required to draw a histogram
-server <- function(input, output) {
-  
-  output$distPlot <- renderPlot({
-    # generate bins based on input$bins from ui.R
-    x    <- faithful[, 2]
-    bins <- seq(min(x), max(x), length.out = input$bins + 1)
+# Transformación del CRS del objeto provincias
+provincias <-
+  provincias %>%
+  st_transform(4326)
+
+# Lectura de un archivo CSV con registros de presencia de felinos en Costa Rica
+felidae <-
+  st_read(
+    "/vsicurl/https://raw.githubusercontent.com/tpb728O-programaciongeoespacialr/2021ii/main/datos/gbif/felidae.csv",
+    options = c(
+      "X_POSSIBLE_NAMES=decimalLongitude",
+      "Y_POSSIBLE_NAMES=decimalLatitude"
+    ),
+    quiet = TRUE
+  )
+# Asignación de un CRS al objeto felidae
+st_crs(felidae) <- 4326
+
+# Lectura de una capa raster de altitud
+altitud <-
+  rast(
+    "/vsicurl/https://raw.githubusercontent.com/tpb728O-programaciongeoespacialr/2021ii/master/datos/worldclim/altitud.tif"
+  )
+
+
+
+# Lista ordenada de especies + "Todas"
+lista_especies <- unique(felidae$species)
+lista_especies <- sort(lista_especies)
+lista_especies <- c("Todas", lista_especies)
+
+# Lista ordenada de provincias + "Todas"
+lista_provincias <- unique(felidae$stateProvince)
+lista_provincias <- sort(lista_provincias)
+lista_provincias <- c("Todas", lista_provincias)
+
+
+# Componentes de la aplicación Shiny
+# Definición del objeto ui
+ui <-
+  dashboardPage(
+    dashboardHeader(title = "Felidae de Costa Rica"),
+    dashboardSidebar(sidebarMenu(
+      menuItem(
+        text = "Filtros",
+        selectInput(
+          inputId = "especie",
+          label = "Especie",
+          choices = lista_especies,
+          selected = "Todas"
+        ),
+        selectInput(
+          inputId = "provincia",
+          label = "Provincia",
+          choices = lista_provincias,
+          selected = "Todas"
+        ),
+        dateRangeInput(
+          inputId = "fecha",
+          label = "Fecha",
+          start = "1800-01-01",
+          end   = Sys.Date(),
+          separator = " a ",
+          language = "es"
+        ),
+        startExpanded = TRUE
+      )
+    )),
+    dashboardBody(fluidRow(
+      box(
+        title = "Mapa de distribución",
+        leafletOutput(outputId = "mapa"),
+        width = 6
+      ),
+      box(
+        title = "Registros de presencia",
+        DTOutput(outputId = "tabla"),
+        width = 6
+      )
+    ),
+    fluidRow(
+      box(
+        title = "Estacionalidad",
+        plotlyOutput(outputId = "grafico_estacionalidad"),
+        width = 12
+      )      
+    ))
+  )
+
+# Definición de la función server
+server <- function(input, output, session) {
+  filtrarRegistros <- reactive({
+    # Remoción de geometrías y selección de columnas
+    felidae_filtrado <-
+      felidae %>%
+      dplyr::select(species, stateProvince, eventDate)
     
-    # draw the histogram with the specified number of bins
-    hist(x, breaks = bins, col = 'darkgray', border = 'white')
+    # Filtrado de felidae por fecha
+    felidae_filtrado <-
+      felidae_filtrado %>%
+      filter(
+        eventDate >= as.Date(input$fecha[1], origin = "1970-01-01") &
+          eventDate <= as.Date(input$fecha[2], origin = "1970-01-01")
+      )
+    # Filtrado de felidae por especie
+    if (input$especie != "Todas") {
+      felidae_filtrado <-
+        felidae_filtrado %>%
+        filter(species == input$especie)
+    }
+    # Filtrado de felidae por provincia
+    if (input$provincia != "Todas") {
+      felidae_filtrado <-
+        felidae_filtrado %>%
+        filter(stateProvince == input$provincia)
+    }
+    
+    return(felidae_filtrado)
   })
-}
-
-# Run the application 
-shinyApp(ui = ui, server = server)
+  
+  output$mapa <- renderLeaflet({
+    registros <-
+      filtrarRegistros()
+    
+    # Conversión del objeto altitud a la clase RasterLayer
+    altitud_rl <- raster::raster(altitud)
+    
+    # Mapa Leaflet con capas de provincias y registros de presencia de felinos
+    leaflet() %>%
+      setView(lng = -84.19452,
+              lat = 9.572735,
+              zoom = 7) %>%
+      addTiles() %>%
+      addRasterImage(altitud_rl,
+                     opacity = 0.6) %>%
+      addPolygons(
+        data = provincias,
+        color = "black",
+        fillColor = "transparent",
+        stroke = TRUE,
+        weight = 1.0,
+      ) %>%
+      addCircleMarkers(
+        data = registros,
+        stroke = TRUE,
+        radius = 4,
+        fillColor = 'red',
+        fillOpacity = 1,
+        label = paste0(
+          registros$species,
+          ", ",
+          registros$stateProvince,
+          ", ",
+          registros$eventDate
+        )
+      )
+  })
+  
+shinyApp(ui, server)
+ 
+  

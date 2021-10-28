@@ -1,0 +1,14 @@
+name: clase_shiny
+title: clase_shiny
+username:
+account: 0mzwj2-maureenarg
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 4985391
+bundleId: 5184711
+url: https://0mzwj2-maureenarg.shinyapps.io/clase_shiny/
+when: 1635383136.29485
+lastSyncTime: 1635383136.29485
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: .RData
